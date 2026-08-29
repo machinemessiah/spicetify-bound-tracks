@@ -2,6 +2,8 @@ import { BoundTracksCollection, CardContainer } from "./BoundTracksCollection";
 import { addSongMapping, getAllMappings } from "./storage";
 import { SongMapping } from "./types/boundTracks";
 
+Spicetify.SVGIcons['bound-tracks'] = Spicetify.SVGIcons?.['bound-tracks'] || '<path d="M5.9,24c-1.6,0-3.1-0.6-4.2-1.7C0.6,21.2,0,19.7,0,18.1c0-1.6,0.6-3.1,1.7-4.2l3.8-3.8l2,2l2.8-2.8l1.4,1.4l-2.8,2.8l1.6,1.6l2.8-2.8l1.4,1.4l-2.8,2.8l2,2l-3.7,3.8C9,23.3,7.5,24,5.9,24z M5.5,12.9l-2.3,2.3C2.4,16,2,17,2,18s0.4,2,1.2,2.8c1.5,1.5,4.1,1.5,5.6,0l2.3-2.4L5.5,12.9z M18.5,13.9l-8.4-8.4l3.7-3.8C14.9,0.6,16.5,0,18,0c1.5,0,3,0.6,4.2,1.7C23.4,2.8,24,4.3,24,5.9s-0.6,3.1-1.7,4.2L18.5,13.9z M13,5.5l5.5,5.5l2.3-2.3C21.6,7.9,22,7,22,5.9c0-1-0.4-2-1.2-2.8c-1.5-1.5-4-1.5-5.6,0L13,5.5z"/>'
+
 const onSongChange = async (data: Spicetify.PlayerState) => {
     const { uri } = data?.item;
 
@@ -42,11 +44,53 @@ const addPlayNext = async (uris: string[]) => {
     }
 };
 
+/*-*
 async function getTrackMetadata(uri: string) {
     const base62 = uri.split(":")[2];
     return await Spicetify.CosmosAsync.get(
         `https://api.spotify.com/v1/tracks/${base62}`
     );
+}
+/*-*/
+
+async function getTrackMetadata(uri: string) {
+    try {
+        // @what - get track metadata via GraphQL queries
+        // @why - because the CosmosAsync API is not reliable anymore
+        // @how - use the GraphQL API to get the track name and artists
+        const [nameRes, artistRes] = await Promise.all([
+            Spicetify.GraphQL.Request(Spicetify.GraphQL.Definitions.getTrackName, { uri }),
+            Spicetify.GraphQL.Request(Spicetify.GraphQL.Definitions.queryTrackArtists, { uri }),
+        ]);
+
+        // @what - extract the track name
+        const name = nameRes?.data?.trackUnion?.name || 'Unknown Track';
+
+        // @what - extract the artists array
+        const artistsData = artistRes?.data?.trackUnion?.artists?.items;
+        const artists = artistsData && artistsData.length > 0 ? artistsData.map((item: any) => ({ name: item.profile?.name || 'Unknown Artist' })) : [{ name: 'Unknown Artist' }];
+
+        // @what - return the minimal structure required by the extension
+        // {string} - name -> for the UI
+        // {string} - uri -> for the mapping/queue logic
+        // {array} - artists[{name: string}]: array of {object}s with a name {string} property -> for the UI
+        const trackMetadata = {
+            name,
+            uri,
+            artists,
+        };
+        console?.dodgerblue ? console.dodgerblue(`[Bound Tracks] getTrackMetadata: ${uri}`, trackMetadata) : console.log(`[Bound Tracks] getTrackMetadata: ${uri}`, trackMetadata);
+        return trackMetadata;
+    } catch (error) {
+        // @why - if the GraphQL queries fail, we still have the functional property - the uri - and we still have the expected object structure {name, uri, [artists[{name: string}]]}
+        const trackMetadata = {
+            name: 'Unknown Track',
+            uri,
+            artists: [{ name: 'Unknown Artist' }],
+        };
+        console.error('[Bound Tracks] getTrackMetadata: Failed to fetch track metadata via GraphQL', error, trackMetadata);
+        return trackMetadata;
+    }
 }
 
 const onClickContextMenuItem = async (
@@ -111,7 +155,8 @@ async function main() {
         (uris: string[]) => {
             onClickContextMenuItem(uris, boundTracksCollection);
         },
-        shouldShowOption
+        shouldShowOption,
+        'bound-tracks'
     ).register();
 
     customElements.define("bookmark-card-container", CardContainer);
